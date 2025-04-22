@@ -1,0 +1,130 @@
+// web-ui/pages/ticker/[ticker].tsx
+import { useRouter } from 'next/router';
+import useSWR from 'swr'; // Data fetching hook
+import { useEffect, useState } from 'react';
+import io from 'socket.io-client'; // Or native WebSocket
+
+// Define types for API responses (should match backend Pydantic schemas)
+interface InsightResponse {
+    ticker: string;
+    narrative: string;
+    confidence: number;
+    // ... other fields
+}
+interface LiveQuote {
+    ticker: string;
+    last_price: number;
+    pct_change: number;
+    // ... other fields
+}
+
+// API fetcher function
+const fetcher = (url: string) => fetch(url).then((res) => {
+    if (!res.ok) {
+        throw new Error('Failed to fetch data');
+    }
+    return res.json();
+});
+
+export default function TickerPage() {
+    const router = useRouter();
+    const { ticker } = router.query;
+
+    const [livePrice, setLivePrice] = useState<number | null>(null);
+
+    // Fetch initial synthesized insight
+    const { data: insightData, error: insightError } = useSWR<InsightResponse>(
+        ticker ? `/api/backend/api/v1/insight/${ticker}` : null, // Use Next.js rewrite/proxy to backend
+        fetcher
+    );
+
+    // Fetch static quote data (could be part of insight or separate)
+    const { data: quoteData, error: quoteError } = useSWR<LiveQuote>(
+        ticker ? `/api/backend/api/v1/quote/${ticker}` : null,
+        fetcher
+    );
+
+    // --- WebSocket for live price updates (Example) ---
+    useEffect(() => {
+        if (!ticker) return;
+
+        // Connect to the specific agent's WebSocket endpoint (via backend proxy if needed)
+        // Adjust URL based on deployment (localhost vs production service)
+        const socket = io(`ws://localhost:8001/ws/${ticker}`); // Or use native WebSocket
+
+        socket.on('connect', () => {
+            console.log(`WebSocket connected for ${ticker}`);
+        });
+
+        socket.on('price_update', (update: { price: number }) => { // Define message structure
+             console.log(`Received price update for ${ticker}:`, update);
+             setLivePrice(update.price);
+        });
+
+        socket.on('disconnect', () => {
+             console.log(`WebSocket disconnected for ${ticker}`);
+        });
+
+        socket.on('connect_error', (err) => {
+             console.error('WebSocket connection error:', err);
+        });
+
+        return () => { // Cleanup on component unmount
+             console.log(`Closing WebSocket for ${ticker}`);
+             socket.disconnect();
+        };
+    }, [ticker]);
+
+    if (insightError || quoteError) return <div>Failed to load data.</div>;
+    if (!insightData || !quoteData) return <div>Loading...</div>;
+
+    const displayPrice = livePrice ?? quoteData.last_price; // Show live price if available
+
+    return (
+        <div className="container mx-auto p-4">
+            <h1 className="text-3xl font-bold mb-4">{ticker} - Market Insight</h1>
+
+            {/* Display Live Price */}
+            <div className="bg-gray-100 p-4 rounded mb-4">
+                <h2 className="text-xl font-semibold">Current Price</h2>
+                <p className={`text-2xl ${quoteData.pct_change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    ${displayPrice?.toFixed(2)} ({quoteData.pct_change.toFixed(2)}%)
+                </p>
+                {livePrice && <span className="text-sm text-blue-500">(Live Update)</span>}
+            </div>
+
+             {/* Display Synthesized Insight */}
+            <div className="bg-gray-100 p-4 rounded mb-4">
+                <h2 className="text-xl font-semibold">AI Insight (Confidence: {(insightData.confidence * 100).toFixed(0)}%)</h2>
+                <p>{insightData.narrative}</p>
+            </div>
+
+             {/* TODO: Add Tabs for Historical, Buzz, Forecast */}
+             {/* TODO: Add Charts (using libraries like Recharts, Chart.js) */}
+             {/* TODO: Display Sentiment Data */}
+             {/* TODO: Display Forecast Data */}
+        </div>
+    );
+}
+
+// web-ui/next.config.js - Example for proxying backend API calls in dev
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  async rewrites() {
+    return [
+      {
+        source: '/api/backend/:path*',
+        // Target the docker-compose service name or localhost in dev
+        destination: 'http://localhost:8000/:path*', // Proxy to Fusion Service
+      },
+       // Add rewrites for agent WebSockets if needed, though direct connection might be simpler
+    ]
+  },
+}
+module.exports = nextConfig
+
+// web-ui/.env.local.example
+# No secrets here usually, config might be passed at build time or fetched client-side
+NEXT_PUBLIC_API_BASE_URL="http://localhost:3000/api/backend" # Or point directly in production if needed
+NEXT_PUBLIC_LIVESTOCK_WS_URL="ws://localhost:8001" # Adjust for prod
