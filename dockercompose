@@ -1,0 +1,105 @@
+# backend/docker-compose.yml
+version: '3.8'
+
+services:
+  fusion_service:
+    build: ./fusion_service
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./fusion_service/.env.local # Use local env file
+    depends_on:
+      - redis
+      - postgres_db # Add depends_on for agents if needed for startup order
+      - agent_livestock
+      - agent_historystock
+      - agent_socialtrend
+    volumes:
+      - ./fusion_service/app:/app/app # Mount code for hot-reloading (with dev server)
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload # Dev command
+
+  agent_livestock:
+    build: ./agent_livestock
+    ports:
+      - "8001:8000" # Agent internal port is 8000
+    env_file:
+      - ./agent_livestock/.env.local
+    volumes:
+      - ./agent_livestock/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  agent_historystock:
+    build: ./agent_historystock
+    ports:
+      - "8002:8000"
+    env_file:
+      - ./agent_historystock/.env.local
+    volumes:
+      - ./agent_historystock/app:/app/app
+    depends_on:
+      - postgres_db # Depends on the database
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  agent_socialtrend:
+    build: ./agent_socialtrend
+    ports:
+      - "8003:8000"
+    env_file:
+      - ./agent_socialtrend/.env.local
+    volumes:
+      - ./agent_socialtrend/app:/app/app
+    depends_on:
+      - redis # Might use Redis for intermediate storage/queue
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  web_ui:
+    build: ../web-ui # Build context is one level up
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../web-ui:/app # Mount code
+      - /app/node_modules # Don't mount node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+    depends_on:
+      - fusion_service # Depends on the main API service
+    command: npm run dev
+
+  # --- Databases & Cache ---
+  postgres_db:
+    image: timescale/timescaledb:latest-pg14 # Use TimeScaleDB image
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: marketdata_hist
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password # Use secrets in production
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d marketdata_hist"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Optional: Kafka for streaming ---
+  # kafka:
+  #   image: confluentinc/cp-kafka:latest
+  #   ...
+
+volumes:
+  postgres_data:
+  redis_data:
