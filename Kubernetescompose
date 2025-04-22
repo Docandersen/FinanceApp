@@ -1,0 +1,105 @@
+# infra/k8s/fusion-service/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fusion-service
+  namespace: market-tool # Define your namespace
+  labels:
+    app: fusion-service
+spec:
+  replicas: 2 # Start with 2 replicas, configure HPA later
+  selector:
+    matchLabels:
+      app: fusion-service
+  template:
+    metadata:
+      labels:
+        app: fusion-service
+    spec:
+      containers:
+      - name: fusion-service
+        image: your-docker-registry/ai-market-tool/fusion-service:latest # Replace with your image URI
+        ports:
+        - containerPort: 8000
+        env:
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: backend-secrets
+                key: fusion_db_url
+          - name: REDIS_URL
+            valueFrom:
+              secretKeyRef:
+                name: backend-secrets
+                key: redis_url
+          - name: LIVESTOCK_AGENT_URL
+            value: "http://agent-livestock-service.market-tool.svc.cluster.local:8000" # K8s service DNS
+          - name: HISTORYSTOCK_AGENT_URL
+            value: "http://agent-historystock-service.market-tool.svc.cluster.local:8000"
+          - name: SOCIALTREND_AGENT_URL
+            value: "http://agent-socialtrend-service.market-tool.svc.cluster.local:8000"
+          # Add other env vars from configmaps or secrets
+        resources: # Define resource requests and limits
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1024Mi"
+        readinessProbe:
+          httpGet:
+            path: / # Replace with a dedicated health check endpoint
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: / # Replace with a dedicated health check endpoint
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 20
+      # Add sidecars if needed (e.g., Istio proxy, Cloud SQL Proxy)
+
+---
+# infra/k8s/fusion-service/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: fusion-service
+  namespace: market-tool
+spec:
+  selector:
+    app: fusion-service
+  ports:
+  - protocol: TCP
+    port: 80 # Port the service listens on within the cluster
+    targetPort: 8000 # Port the container listens on
+  type: ClusterIP # Internal service
+
+---
+# infra/k8s/fusion-service/hpa.yaml (Example Horizontal Pod Autoscaler)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: fusion-service-hpa
+  namespace: market-tool
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: fusion-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70 # Target 70% CPU utilization
+  # - type: Resource
+  #   resource:
+  #     name: memory
+  #     target:
+  #       type: AverageValue
+  #       averageValue: 800Mi # Target average memory usage
