@@ -1,0 +1,156 @@
+ai-market-tool/
+├── backend/
+│   ├── fusion_service/             # Orchestrator, Prediction Engine, Core APIs
+│   │   ├── app/
+│   │   │   ├── __init__.py
+│   │   │   ├── main.py             # FastAPI entrypoint
+│   │   │   ├── routes/             # API endpoints (/insight, /forecast, etc.)
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── insight.py
+│   │   │   │   └── forecast.py
+│   │   │   ├── orchestrator/       # Agent coordination logic
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── fusion.py
+│   │   │   ├── prediction/         # Prediction models logic
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── models.py       # Load/run ML models (LSTM, XGBoost, etc.)
+│   │   │   │   └── engine.py
+│   │   │   ├── agents/             # Client stubs for communicating with agents
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── base_client.py
+│   │   │   │   ├── livestock_client.py
+│   │   │   │   ├── historystock_client.py
+│   │   │   │   └── socialtrend_client.py
+│   │   │   ├── schemas/            # Pydantic request/response models
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── market_data.py
+│   │   │   ├── core/               # Config, shared utilities
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── config.py
+│   │   │   └── tests/              # Unit/Integration tests
+│   │   ├── protos/                 # gRPC protobuf definitions (if used)
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── .env.example
+│   │
+│   ├── agent_livestock/            # LiveStock microservice (Real-time Data)
+│   │   ├── app/
+│   │   │   ├── __init__.py
+│   │   │   ├── main.py             # FastAPI/WebSocket endpoint
+│   │   │   ├── data_sources/       # Connectors to IEX, Polygon etc.
+│   │   │   ├── analytics/          # VWAP, Volatility etc.
+│   │   │   ├── schemas/
+│   │   │   ├── core/
+│   │   │   └── tests/
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── .env.example
+│   │
+│   ├── agent_historystock/         # HistoryStock microservice (Archival Data)
+│   │   ├── app/
+│   │   │   ├── __init__.py
+│   │   │   ├── main.py             # FastAPI/GraphQL endpoint
+│   │   │   ├── data_access/        # Querying TimeScaleDB/S3
+│   │   │   ├── analysis/           # ARIMA, Prophet logic
+│   │   │   ├── schemas/
+│   │   │   ├── core/
+│   │   │   └── tests/
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── .env.example
+│   │
+│   ├── agent_socialtrend/          # SocialTrend microservice (Sentiment)
+│   │   ├── app/
+│   │   │   ├── __init__.py
+│   │   │   ├── main.py             # FastAPI endpoint/Stream processor
+│   │   │   ├── ingest/             # Twitter, Reddit API clients
+│   │   │   ├── sentiment/          # NLP model loading/inference
+│   │   │   ├── schemas/
+│   │   │   ├── core/
+│   │   │   └── tests/
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── .env.example
+│   │
+│   └── docker-compose.yml          # For local development orchestration
+│   └── docker-compose.override.yml # For local environment specifics
+│
+├── web-ui/                         # Next.js Frontend
+│   ├── pages/
+│   │   ├── _app.tsx
+│   │   ├── index.tsx               # Dashboard/Home
+│   │   ├── ticker/[ticker].tsx     # Ticker detail page
+│   │   └── api/                    # Next.js API routes (optional, for BFF pattern)
+│   ├── components/                 # Reusable React components (Charts, Tables, Widgets)
+│   ├── hooks/                      # Custom React hooks (e.g., useLiveData, useSentiment)
+│   ├── lib/                        # API client, utility functions
+│   ├── contexts/                   # React Context for state management
+│   ├── styles/                     # Global styles, Tailwind base
+│   ├── public/                     # Static assets
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── next.config.js
+│   ├── tailwind.config.js
+│   ├── postcss.config.js
+│   └── .env.local.example
+│
+├── mobile-app/                     # React Native Application
+│   ├── src/
+│   │   ├── screens/                # Home, TickerDetail, AlertBuilder, Settings
+│   │   ├── components/             # Shared UI components
+│   │   ├── navigation/             # App navigation setup (React Navigation)
+│   │   ├── services/               # API client logic
+│   │   ├── hooks/                  # Custom hooks
+│   │   ├── state/                  # State management (e.g., Zustand, Redux Toolkit)
+│   │   └── types/                  # TypeScript types
+│   ├── App.tsx                     # Root component
+│   ├── index.js                    # App entry point
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── metro.config.js
+│   ├── babel.config.js
+│   ├── ios/                        # iOS native project
+│   ├── android/                    # Android native project
+│   └── .env.example
+│
+├── infra/                          # Infrastructure as Code (IaC) & Deployment
+│   ├── k8s/                        # Kubernetes Manifests (or Helm Charts)
+│   │   ├── base/                   # Base configurations
+│   │   ├── overlays/               # Environment-specific overrides (dev, staging, prod)
+│   │   ├── fusion-service/
+│   │   ├── agent-livestock/
+│   │   ├── agent-historystock/
+│   │   ├── agent-socialtrend/
+│   │   ├── web-ui/
+│   │   ├── databases/              # StatefulSet examples for DBs (if not using managed services)
+│   │   └── ingress/                # Ingress controller setup
+│   ├── terraform/                  # Cloud resource provisioning (AWS/GCP/Azure)
+│   │   ├── modules/                # Reusable Terraform modules (VPC, K8s Cluster, DB, Cache)
+│   │   ├── environments/           # Environment configurations (dev, staging, prod)
+│   │   │   ├── dev/
+│   │   │   ├── staging/
+│   │   │   └── prod/
+│   │   └── main.tf                 # Root Terraform configuration
+│   └── scripts/                    # Helper scripts for deployment, DB migrations etc.
+│
+├── ml_models/                      # Scripts and notebooks for model training/evaluation
+│   ├── notebooks/                  # Exploratory data analysis, model experimentation
+│   ├── training_pipelines/         # Scripts for automated model training (e.g., using Kubeflow, MLflow)
+│   ├── requirements-ml.txt         # Dependencies for ML tasks
+│   └── model_registry/             # Configuration or links to MLflow/Vertex AI registry
+│
+├── docs/                           # Project documentation
+│   ├── architecture.md
+│   ├── api_reference.md
+│   ├── setup_guide.md
+│   └── deployment_guide.md
+│
+├── .github/
+│   └── workflows/                  # CI/CD Pipelines
+│       ├── ci-backend.yml          # Lint, test, build Docker images for backend services
+│       ├── ci-frontend.yml         # Lint, test, build web/mobile apps
+│       └── cd-deploy.yml           # Deploy to K8s via Argo CD trigger or kubectl/helm
+│
+├── .gitignore
+├── README.md
+└── Makefile                        # Optional: shortcuts for common commands (build, test, run, deploy)
