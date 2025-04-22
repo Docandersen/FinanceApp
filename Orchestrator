@@ -1,0 +1,165 @@
+# backend/fusion_service/app/main.py
+from fastapi import FastAPI
+from .routes import insight, forecast
+from .core.config import settings # Hypothetical config loading
+
+app = FastAPI(title=settings.PROJECT_NAME)
+
+app.include_router(insight.router, prefix="/api/v1", tags=["Insight"])
+app.include_router(forecast.router, prefix="/api/v1", tags=["Forecast"])
+
+@app.get("/")
+async def root():
+    return {"message": "Fusion Service Running"}
+
+# --- Add Prometheus metrics, health checks etc. ---
+
+# backend/fusion_service/app/routes/insight.py
+from fastapi import APIRouter, Depends, HTTPException, Path
+from ..orchestrator.fusion import get_combined_insight
+from ..schemas.market_data import InsightResponse, TickerSymbol
+from ..agents.livestock_client import LiveStockClient # Assume client classes exist
+from ..agents.historystock_client import HistoryStockClient
+from ..agents.socialtrend_client import SocialTrendClient
+
+router = APIRouter()
+
+# Dependency Injection for clients (could use FastAPI's Depends with classes)
+def get_livestock_client():
+    return LiveStockClient() # In reality, init with config/URL
+
+def get_historystock_client():
+    return HistoryStockClient()
+
+def get_socialtrend_client():
+    return SocialTrendClient()
+
+
+@router.get("/insight/{ticker}", response_model=InsightResponse)
+async def fetch_insight(
+    ticker: TickerSymbol = Path(..., title="Ticker Symbol"),
+    livestock: LiveStockClient = Depends(get_livestock_client),
+    history: HistoryStockClient = Depends(get_historystock_client),
+    social: SocialTrendClient = Depends(get_socialtrend_client),
+):
+    """
+    Provides a synthesized insight combining live, historical, and social data.
+    Example Call: /api/v1/insight/AAPL
+    """
+    try:
+        insight_data = await get_combined_insight(ticker, livestock, history, social)
+        if not insight_data:
+            raise HTTPException(status_code=404, detail="Could not generate insight for ticker")
+        return insight_data
+    except Exception as e:
+        # Add proper logging here
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+
+# backend/fusion_service/app/orchestrator/fusion.py
+import asyncio
+from ..schemas.market_data import TickerSymbol, InsightResponse, LiveData, HistoricalData, SocialTrendData
+# Import agent client types for type hinting
+from ..agents.livestock_client import LiveStockClient
+from ..agents.historystock_client import HistoryStockClient
+from ..agents.socialtrend_client import SocialTrendClient
+
+async def get_combined_insight(
+    ticker: TickerSymbol,
+    livestock_client: LiveStockClient,
+    history_client: HistoryStockClient,
+    social_client: SocialTrendClient
+) -> InsightResponse | None:
+    """
+    Orchestrates calls to different agents and synthesizes the results.
+    """
+    # --- This is highly simplified ---
+    # In reality: use correlation IDs, handle timeouts, retries, error aggregation
+    #             parse user query for specific needs (why?, forecast?, just quote?)
+    #             potentially use Kafka/Redis for intermediate results (Shared Fact Store)
+
+    live_task = asyncio.create_task(livestock_client.get_live_data(ticker))
+    hist_task = asyncio.create_task(history_client.get_relevant_history(ticker))
+    social_task = asyncio.create_task(social_client.get_social_trends(ticker))
+
+    results = await asyncio.gather(live_task, hist_task, social_task, return_exceptions=True)
+
+    live_data: LiveData | None = results[0] if not isinstance(results[0], Exception) else None
+    hist_data: HistoricalData | None = results[1] if not isinstance(results[1], Exception) else None
+    social_data: SocialTrendData | None = results[2] if not isinstance(results[2], Exception) else None
+
+    # --- TODO: Implement actual synthesis logic ---
+    # Combine data, generate narrative, calculate confidence score
+    # Example: if live_data shows high volume and social_data shows positive sentiment...
+    narrative = f"Synthesized insight for {ticker}: "
+    if live_data:
+        narrative += f"Currently trading at {live_data.last_price}. "
+        if live_data.abnormal_volume: narrative += "Volume is abnormally high. "
+    if social_data:
+        narrative += f"Social sentiment score: {social_data.sentiment_score}. "
+    if hist_data:
+        narrative += f"Historical pattern ID {hist_data.pattern_id} detected. "
+
+    # Placeholder response
+    return InsightResponse(
+        ticker=ticker,
+        narrative=narrative,
+        confidence=0.85, # Calculated based on available data quality/agreement
+        live_ref=live_data.reference_id if live_data else None,
+        hist_ref=hist_data.reference_id if hist_data else None,
+        social_ref=social_data.reference_id if social_data else None,
+        # Add chart data, scores etc.
+    )
+
+# backend/fusion_service/app/schemas/market_data.py
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from datetime import datetime
+
+TickerSymbol = str # Could add validation regex
+
+class LiveData(BaseModel):
+    reference_id: str
+    ticker: TickerSymbol
+    last_price: float
+    pct_change: float
+    abnormal_volume: bool
+    timestamp: datetime
+    # ... other fields
+
+class HistoricalData(BaseModel):
+    reference_id: str
+    ticker: TickerSymbol
+    pattern_id: Optional[str] = None
+    correlation_score: Optional[float] = None
+    # ... other fields
+
+class SocialTrendData(BaseModel):
+    reference_id: str
+    ticker: TickerSymbol
+    sentiment_score: float = Field(..., ge=-1, le=1)
+    velocity_score: float
+    top_keywords: List[str]
+    # ... other fields
+
+class InsightResponse(BaseModel):
+    ticker: TickerSymbol
+    narrative: str
+    confidence: float = Field(..., ge=0, le=1)
+    live_ref: Optional[str] = None
+    hist_ref: Optional[str] = None
+    social_ref: Optional[str] = None
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    # Add fields for chart data, specific scores, etc.
+
+# backend/fusion_service/.env.example
+PROJECT_NAME="AI Market Tool - Fusion Service"
+# Agent Service URLs (resolved via K8s service discovery in production)
+LIVESTOCK_AGENT_URL="http://localhost:8001" # Or agent-livestock-service.namespace.svc.cluster.local
+HISTORYSTOCK_AGENT_URL="http://localhost:8002"
+SOCIALTREND_AGENT_URL="http://localhost:8003"
+# Database, Cache URLs
+DATABASE_URL="postgresql+asyncpg://user:password@localhost:5432/fusiondb"
+REDIS_URL="redis://localhost:6379"
+# API Keys (loaded securely, e.g., via K8s Secrets or Vault)
+SOME_API_KEY="your_key_here"
