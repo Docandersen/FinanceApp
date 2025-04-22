@@ -1,0 +1,62 @@
+# backend/agent_livestock/app/main.py
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Path, HTTPException
+from typing import Dict
+from .data_sources.iex import get_iex_quote # Example data source module
+from .analytics.volume import check_abnormal_volume # Example analytics module
+from .schemas.live_data import LiveQuoteResponse, TickerSymbol # Define Pydantic schema
+
+app = FastAPI(title="LiveStock Agent")
+
+# Very basic in-memory storage for WebSocket connections (Use Redis/other for production)
+connected_clients: Dict[TickerSymbol, List[WebSocket]] = {}
+
+@app.get("/quote/{ticker}", response_model=LiveQuoteResponse)
+async def get_quote(ticker: TickerSymbol = Path(...)):
+    """ Fetch latest quote for a ticker. """
+    try:
+        quote_data = await get_iex_quote(ticker) # Fetch from actual API
+        if not quote_data:
+            raise HTTPException(status_code=404, detail="Ticker not found or API error")
+
+        # Add analytics
+        is_abnormal = check_abnormal_volume(ticker, quote_data.get('volume'))
+
+        # Map to response schema
+        return LiveQuoteResponse(
+            ticker=ticker,
+            last_price=quote_data.get('latestPrice'),
+            pct_change=quote_data.get('changePercent', 0) * 100,
+            volume=quote_data.get('volume'),
+            timestamp=quote_data.get('latestUpdate'), # Convert timestamp format
+            abnormal_volume=is_abnormal,
+            reference_id=f"live_{ticker}_{datetime.utcnow().timestamp()}" # Generate unique ID
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- WebSocket endpoint example (highly simplified) ---
+@app.websocket("/ws/{ticker}")
+async def websocket_endpoint(websocket: WebSocket, ticker: TickerSymbol = Path(...)):
+    await websocket.accept()
+    if ticker not in connected_clients:
+        connected_clients[ticker] = []
+    connected_clients[ticker].append(websocket)
+    print(f"Client connected for {ticker}")
+    try:
+        while True:
+            # This should ideally be driven by an external feed pushing data
+            # For demo, just wait for messages (not useful for price updates)
+            data = await websocket.receive_text()
+            # In a real scenario, you'd have a separate process pushing updates
+            # For example, using Kafka/Redis pub-sub triggered by data source changes
+            await websocket.send_text(f"Message text was: {data} for {ticker}")
+    except WebSocketDisconnect:
+        connected_clients[ticker].remove(websocket)
+        print(f"Client disconnected for {ticker}")
+    except Exception as e:
+        print(f"Error on WebSocket for {ticker}: {e}")
+        if ticker in connected_clients and websocket in connected_clients[ticker]:
+             connected_clients[ticker].remove(websocket)
+
+# --- TODO: Implement background task to poll/stream data sources and push to websockets ---
