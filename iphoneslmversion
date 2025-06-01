@@ -1,0 +1,251 @@
+import SwiftUI
+
+struct HomeView: View {
+    @EnvironmentObject var networkManager: NetworkManager
+    @EnvironmentObject var slmEngine: SLMEngine
+    @EnvironmentObject var insightCache: InsightCache // Access cached data
+
+    // Example: Track a few symbols
+    @State private var trackedSymbols: [String] = ["BTC-USD", "GOLD", "AAPL"]
+    @State private var marketInsights: [String: MarketInsight] = [:] // Symbol -> Insight
+    @State private var aiHighlight: String = "Loading AI highlights..."
+    @State private var isLoading: Bool = true
+    @State private var showingQueryAssistant = false
+    @State private var showingAlertBuilder = false
+
+    var body: some View {
+        NavigationView {
+            List {
+                // MARK: - AI Highlights Section
+                Section(header: Text("Today’s AI Highlights")
+                                    .font(.headline)
+                                    .padding(.top)) {
+                    if isLoading {
+                        ProgressView()
+                    } else {
+                        Text(aiHighlight)
+                            .padding(.vertical, 5)
+                            .onAppear {
+                                // This could be fetched or derived by SLM from multiple insights
+                                if let firstInsight = marketInsights.values.first, let highlight = firstInsight.aiHighlight {
+                                    self.aiHighlight = highlight
+                                } else if let cachedHighlight = insightCache.cachedInsights.first?.aiHighlight {
+                                     self.aiHighlight = cachedHighlight + " (Cached)"
+                                }
+                                else {
+                                    self.aiHighlight = "No specific AI highlight available currently."
+                                }
+                            }
+                    }
+                    // Offline Mode Indicator
+                    if let lastSync = insightCache.lastSyncTimestamp {
+                         let minutesAgo = Int(Date().timeIntervalSince(lastSync) / 60)
+                         if minutesAgo > 60 { // Example: stale if older than an hour
+                            Text("Data may be stale. Last sync: \(minutesAgo) minutes ago.")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                         }
+                    } else {
+                        Text("Currently in offline mode or never synced.")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                }
+
+                // MARK: - Live Tiles Section
+                Section(header: Text("Live Tiles")) {
+                    if isLoading && marketInsights.isEmpty {
+                        ProgressView()
+                    } else if !marketInsights.isEmpty {
+                        ForEach(trackedSymbols, id: \.self) { symbol in
+                            if let insight = marketInsights[symbol] {
+                                LiveTileView(insight: insight)
+                            } else if let cachedInsight = insightCache.getCachedInsights(for: symbol).first {
+                                LiveTileView(insight: cachedInsight, isStale: true)
+                            } else {
+                                Text("Loading data for \(symbol)...")
+                                    .onAppear { fetchDataForSymbol(symbol) }
+                            }
+                        }
+                    } else if !insightCache.cachedInsights.isEmpty && trackedSymbols.allSatisfy({ symbol in insightCache.getCachedInsights(for: symbol).isEmpty }) {
+                         Text("No live data. Displaying general cached insights:")
+                         ForEach(insightCache.cachedInsights.prefix(3)) { insight in // Display some generic cached insights
+                            LiveTileView(insight: insight, isStale: true)
+                         }
+                    }
+                     else {
+                        Text("No data available. Pull to refresh or check connection.")
+                    }
+                }
+            }
+            .navigationTitle("Financial Companion")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: { showingAlertBuilder = true }) {
+                        Label("Alerts", systemImage: "bell.badge")
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showingQueryAssistant = true }) {
+                        Label("Query", systemImage: "magnifyingglass")
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: refreshData) {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(isLoading)
+                }
+            }
+            .sheet(isPresented: $showingQueryAssistant) {
+                QueryAssistantView() // Pass environment objects if not already available
+            }
+            .sheet(isPresented: $showingAlertBuilder) {
+                CustomAlertBuilderView()
+            }
+            .onAppear {
+                if marketInsights.isEmpty { // Load initial data only if empty
+                    refreshData()
+                }
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle()) // Avoid sidebar on iPad if not desired
+    }
+
+    func refreshData() {
+        isLoading = true
+        Task {
+            // Attempt to fetch fresh data for all tracked symbols
+            var newInsights: [String: MarketInsight] = [:]
+            var fetchedHighlights: [String] = []
+
+            for symbol in trackedSymbols {
+                do {
+                    // For simplicity, using a placeholder MarketInsight structure from a mock forecast
+                    // In a real app, you'd fetch comprehensive market data.
+                    let forecast = try await networkManager.fetchForecast(for: symbol) // This returns ForecastData
+                    let insight = MarketInsight(
+                        id: UUID(),
+                        symbol: symbol,
+                        currentPrice: forecast.targetPrice, // Example mapping
+                        priceChangePercentage24h: nil, // Fetch separately or from another source
+                        sentimentScore: nil, // Fetch separately
+                        aiHighlight: forecast.summaryDescription, // Use forecast summary as highlight
+                        newsSnippets: [],
+                        prediction: forecast,
+                        timestamp: Date(),
+                        historicalPrices: nil
+                    )
+                    newInsights[symbol] = insight
+                    if let highlight = insight.aiHighlight {
+                        fetchedHighlights.append(highlight)
+                    }
+                } catch {
+                    print("❌ Error fetching data for \(symbol): \(error.localizedDescription)")
+                    // Optionally load from cache if network fails for a specific symbol
+                    if let cached = insightCache.getCachedInsights(for: symbol).first {
+                        newInsights[symbol] = cached // Mark as stale visually if needed
+                    }
+                }
+            }
+            
+            // Update main AI highlight (can be sophisticated, e.g., SLM summarizes multiple fetchedHighlights)
+            if let firstHighlight = fetchedHighlights.first {
+                self.aiHighlight = firstHighlight
+            } else if let cachedHighlight = insightCache.cachedInsights.first?.aiHighlight {
+                self.aiHighlight = cachedHighlight + " (Cached)"
+            } else {
+                self.aiHighlight = "No new AI highlights found."
+            }
+
+            // Save fetched insights to cache
+            insightCache.saveInsights(Array(newInsights.values))
+            
+            // Update UI
+            await MainActor.run {
+                self.marketInsights = newInsights
+                self.isLoading = false
+            }
+        }
+    }
+
+    func fetchDataForSymbol(_ symbol: String) {
+        // This can be a more targeted fetch if needed
+        // For now, refreshData fetches all.
+    }
+}
+
+struct LiveTileView: View {
+    let insight: MarketInsight
+    var isStale: Bool = false // Passed if data is from cache and potentially old
+
+    var body: some View {
+        NavigationLink(destination: TickerDetailView(symbol: insight.symbol, initialInsight: insight)) {
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(insight.symbol)
+                        .font(.headline)
+                    Text(insight.aiHighlight ?? "No specific highlight.")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                        .lineLimit(2)
+                    if isStale || insight.isStale {
+                        Text("Data may be stale")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
+                }
+                Spacer()
+                VStack(alignment: .trailing) {
+                    if let price = insight.currentPrice {
+                        Text(String(format: "$%.2f", price))
+                            .font(.title3)
+                            .foregroundColor( (insight.priceChangePercentage24h ?? 0) >= 0 ? .green : .red)
+                    }
+                    if let change = insight.priceChangePercentage24h {
+                        Text(String(format: "%.2f%%", change))
+                            .font(.caption)
+                            .foregroundColor(change >= 0 ? .green : .red)
+                    }
+                }
+            }
+            .padding(.vertical, 8)
+            // Add swipe actions here if needed
+            .swipeActions(edge: .trailing) {
+                Button { print("Mark \(insight.symbol) as favorite") } label: {
+                    Label("Favorite", systemImage: "star.fill")
+                }
+                .tint(.yellow)
+            }
+            .swipeActions(edge: .leading) {
+                Button { print("Set alert for \(insight.symbol)") } label: {
+                    Label("Alert", systemImage: "bell.fill")
+                }
+                .tint(.blue)
+            }
+        }
+    }
+}
+
+// Preview for HomeView (optional)
+struct HomeView_Previews: PreviewProvider {
+    static var previews: some View {
+        let mockInsight = MarketInsight(
+            id: UUID(), symbol: "BTC-USD", currentPrice: 60000.00, priceChangePercentage24h: 2.5,
+            sentimentScore: 0.6, aiHighlight: "Bitcoin showing strong upward momentum.",
+            newsSnippets: ["BTC News 1", "BTC News 2"],
+            prediction: ForecastData(summaryDescription: "Expected to rise further."),
+            timestamp: Date(), historicalPrices: nil
+        )
+        let mockCache = InsightCache()
+        mockCache.cachedInsights = [mockInsight]
+        mockCache.lastSyncTimestamp = Calendar.current.date(byAdding: .minute, value: -90, to: Date())
+
+
+        HomeView()
+            .environmentObject(NetworkManager())
+            .environmentObject(SLMEngine())
+            .environmentObject(DataSyncService())
+            .environmentObject(mockCache)
+    }
+}
